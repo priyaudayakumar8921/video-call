@@ -1,0 +1,381 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Sync Meeting Pro</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
+    <style>
+        :root {
+            --teams-purple: #6264A7;
+            --teams-bg: #11100F;
+            --teams-red: #C4314B;
+            --chat-bg: #1f1f1f;
+        }
+
+        body {
+            background-color: var(--teams-bg);
+            color: white;
+            font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+            margin: 0; padding: 0; height: 100vh;
+            display: flex; flex-direction: column; overflow: hidden;
+        }
+
+        .btn-round {
+            width: 52px; height: 52px; border-radius: 50%;
+            background: #2d2d2d; border: 1px solid #444;
+            display: flex; align-items: center; justify-content: center;
+            cursor: pointer; transition: background 0.2s;
+        }
+        .btn-round.off { background: var(--teams-red) !important; border-color: var(--teams-red); }
+        svg { width: 24px; height: 24px; fill: currentColor; }
+
+        /* SETUP VIEW */
+        #setupView {
+            flex: 1; display: flex; flex-direction: column;
+            padding: 24px; align-items: center; justify-content: center;
+        }
+
+        .preview-box {
+            width: 100%; max-width: 360px; aspect-ratio: 16/9;
+            background: #000; border-radius: 12px; overflow: hidden;
+            position: relative; margin-bottom: 24px; border: 1px solid #333;
+        }
+
+        video {
+            width: 100%; height: 100%; object-fit: cover;
+            transform: scaleX(-1); background: #000;
+        }
+
+        /* CALL GRID */
+        #callView { display: none; flex-direction: column; height: 100vh; position: relative; }
+
+        .grid-container {
+            flex: 1; display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            grid-template-rows: repeat(2, 1fr);
+            gap: 8px; padding: 8px; background: #000;
+        }
+
+        .video-tile {
+            background: #1a1a1a; border-radius: 8px;
+            position: relative; overflow: hidden;
+            display: flex; align-items: center; justify-content: center;
+        }
+
+        .name-label {
+            position: absolute; bottom: 8px; left: 8px;
+            background: rgba(0,0,0,0.6); padding: 2px 8px;
+            border-radius: 4px; font-size: 11px; z-index: 20;
+        }
+
+        .footer {
+            height: 90px; background: #1a1a1a;
+            display: flex; justify-content: center; align-items: center;
+            gap: 15px; padding-bottom: env(safe-area-inset-bottom);
+        }
+
+        .nav-btn {
+            position: absolute; top: 50%; transform: translateY(-50%);
+            background: rgba(0,0,0,0.8); padding: 12px; border-radius: 50%;
+            z-index: 100; border: 1px solid #444;
+        }
+
+        /* CHAT PANEL */
+        #chatPanel {
+            position: absolute; top: 0; right: -100%; bottom: 90px;
+            width: 100%; max-width: 350px;
+            background: var(--chat-bg);
+            transition: right 0.3s ease;
+            z-index: 200; border-left: 1px solid #333;
+            display: flex; flex-direction: column;
+        }
+        #chatPanel.open { right: 0; }
+
+        .chat-msg {
+            margin-bottom: 12px; padding: 8px 12px;
+            background: #2d2d2d; border-radius: 8px;
+            max-width: 85%; align-self: flex-start;
+        }
+        .chat-msg.me {
+            background: var(--teams-purple);
+            align-self: flex-end;
+        }
+    </style>
+</head>
+<body>
+
+    <div id="setupView">
+        <h2 class="text-xl font-bold mb-6"> CEC ECHO Meeting Setup</h2>
+        <div class="preview-box">
+            <video id="preVidObj" autoplay playsinline muted></video>
+            <div id="setupCamOff" class="hidden absolute inset-0 flex flex-col items-center justify-center bg-zinc-900 text-zinc-500">
+                <svg class="mb-2 opacity-20 w-12 h-12" viewBox="0 0 24 24"><path d="M21 6.5l-4 4V7c0-.55-.45-1-1-1H9.82L21 17.18V6.5zM3.27 2L2 3.27l2 2V17c0 .55.45 1 1 1h12.73l2 2L21 18.73 3.27 2z"/></svg>
+                <span>Camera is Off</span>
+            </div>
+        </div>
+        
+        <div class="flex gap-6 mb-8">
+            <button id="btnMicPre" class="btn-round" onclick="toggleMedia('mic')"></button>
+            <button id="btnVidPre" class="btn-round" onclick="toggleMedia('vid')"></button>
+        </div>
+
+        <div class="w-full max-w-xs space-y-3">
+            <input type="text" id="nameIn" placeholder="Your Name" class="w-full p-3 bg-[#292827] rounded outline-none border-b-2 border-transparent focus:border-[#6264A7]">
+            
+            <div class="border-t border-zinc-700 pt-3 mt-3">
+                <button onclick="createRoom()" class="w-full p-3 bg-[#6264A7] rounded font-bold shadow-lg mb-2">Host New Meeting</button>
+                <div class="flex gap-2">
+                    <input type="text" id="joinIdInput" placeholder="Enter Meeting ID" class="flex-1 p-3 bg-[#292827] rounded outline-none text-sm">
+                    <button onclick="joinRoom()" class="bg-zinc-700 px-4 rounded font-bold text-sm">Join</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div id="callView">
+        <header class="p-4 flex justify-between items-center bg-[#1a1a1a] border-b border-zinc-800">
+            <div>
+                <span class="text-xs font-bold block" id="headerTitle">SYNC ROOM</span>
+                <span class="text-xs text-zinc-500" id="roomIdDisplay">ID: --</span>
+            </div>
+            <div class="flex gap-5">
+                <button onclick="toggleChat()" class="relative">
+                    <svg viewBox="0 0 24 24" class="w-6 h-6"><path d="M20 2H4c-1.1 0-2 .9-2 2v18l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2z"/></svg>
+                    <span id="chatBadge" class="hidden absolute -top-1 -right-1 bg-red-500 text-[10px] w-4 h-4 rounded-full flex items-center justify-center">1</span>
+                </button>
+                <svg viewBox="0 0 24 24" class="w-6 h-6 opacity-70"><path d="M16 11c1.66 0 2.99-1.34 2.99-3S17.66 5 16 5s-3 1.34-3 3 1.34 3 3 3zm-8 0c1.66 0 2.99-1.34 2.99-3S9.66 5 8 5 5 6.34 5 8s1.34 3 3 3z"/></svg>
+            </div>
+        </header>
+
+        <main id="grid" class="grid-container"></main>
+
+        <div id="chatPanel">
+            <div class="p-4 border-b border-zinc-800 flex justify-between items-center bg-[#1a1a1a]">
+                <span class="font-bold">Chat</span>
+                <button onclick="toggleChat()" class="text-zinc-400">✕</button>
+            </div>
+            <div id="chatBox" class="flex-1 p-4 overflow-y-auto flex flex-col text-sm"></div>
+            <div class="p-3 bg-[#1a1a1a] flex gap-2 border-t border-zinc-800">
+                <input type="text" id="chatInput" placeholder="Type a message..." class="flex-1 bg-zinc-800 rounded p-2 text-sm outline-none" onkeypress="if(event.key==='Enter') sendMsg()">
+                <button onclick="sendMsg()" class="text-[#6264A7] font-bold px-2">Send</button>
+            </div>
+        </div>
+
+        <button id="prev" class="nav-btn left-2 hidden" onclick="move(-1)"><svg viewBox="0 0 24 24"><path d="M15.41 7.41L14 6l-6 6 6 6 1.41-1.41L10.83 12z"/></svg></button>
+        <button id="next" class="nav-btn right-2 hidden" onclick="move(1)"><svg viewBox="0 0 24 24"><path d="M10 6L8.59 7.41 13.17 12l-4.58 4.59L10 18l6-6z"/></svg></button>
+
+        <footer class="footer">
+            <button id="btnMicCall" class="btn-round" onclick="toggleMedia('mic')"></button>
+            <button id="btnVidCall" class="btn-round" onclick="toggleMedia('vid')"></button>
+            <button onclick="location.reload()" class="btn-round !bg-[#C4314B] !w-20 !rounded-xl">
+                <svg viewBox="0 0 24 24"><path d="M12 9c-1.6 0-3.15.25-4.6.72v3.1c0 .39-.23.74-.56.9-.98.49-1.87 1.12-2.66 1.85-.18.18-.43.28-.7.28-.28 0-.53-.11-.71-.29L.29 13.08c-.18-.17-.29-.42-.29-.7 0-.28.11-.53.29-.71C3.34 8.78 7.46 7 12 7s8.66 1.78 11.71 4.67c.18.18.29.43.29.71 0 .28-.11.53-.29.71l-2.48 2.48c-.18.18-.43.29-.71.29-.27 0-.52-.11-.7-.28-.79-.74-1.69-1.36-2.67-1.85-.33-.16-.56-.5-.56-.9v-3.1C15.15 9.25 13.6 9 12 9z"/></svg>
+            </button>
+        </footer>
+    </div>
+
+    <script>
+        let stream = null;
+        let isMic = true, isVid = true, isChatOpen = false;
+        let page = 0;
+        let myName = "";
+        
+        // PeerJS state
+        let peer = null;
+        let myPeerId = "";
+        let activeCalls = []; // To keep track of peer connections
+        let remoteStreams = []; // Array of objects: {peerId, name, stream}
+
+        const icons = {
+            mic: '<svg viewBox="0 0 24 24"><path d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3z"/><path d="M17 11c0 2.76-2.24 5-5 5s-5-2.24-5-5H5c0 3.53 2.61 6.43 6 6.92V21h2v-3.08c3.39-.49 6-3.39 6-6.92h-2z"/></svg>',
+            micOff: '<svg viewBox="0 0 24 24"><path d="M19 11h-1.7c0 .74-.16 1.43-.43 2.05l1.23 1.23c.56-.98.9-2.09.9-3.28zm-4.02.17c0-.06.02-.11.02-.17V5c0-1.66-1.34-3-3-3S9 3.34 9 5v.17l5.98 6zm-1.1 4.5l-1.84-1.84c-.31.11-.64.17-.98.17-2.76 0-5-2.24-5-5H5c0 3.53 2.61 6.43 6 6.92V21h2v-3.08c.39-.05.75-.17 1.1-.33zM4.41 2.86L3 4.27l15.73 15.73 1.41-1.41L4.41 2.86z"/></svg>',
+            vid: '<svg viewBox="0 0 24 24"><path d="M17 10.5V7c0-.55-.45-1-1-1H4c-.55 0-1 .45-1 1v10c0 .55.45 1 1 1h12c.55 0 1-.45 1-1v-3.5l4 4v-11l-4 4z"/></svg>',
+            vidOff: '<svg viewBox="0 0 24 24"><path d="M21 6.5l-4 4V7c0-.55-.45-1-1-1H9.82L21 17.18V6.5zM3.27 2L2 3.27l2 2V17c0 .55.45 1 1 1h12.73l2 2L21 18.73 3.27 2zM5 16V7.27L13.73 16H5z"/></svg>'
+        };
+
+        async function startApp() {
+            try {
+                stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+                attachStreamToElement('preVidObj', stream);
+                updateUI();
+                
+                // Init PeerJS immediately
+                peer = new Peer();
+                
+                peer.on('open', (id) => {
+                    myPeerId = id;
+                    console.log('My peer ID is: ' + id);
+                });
+
+                // Listen for incoming calls
+                peer.on('call', (call) => {
+                    call.answer(stream); // Answer the call with our local stream
+                    call.on('stream', (userRemoteStream) => {
+                        addRemoteStream(call.peer, userRemoteStream);
+                    });
+                });
+
+            } catch (err) {
+                console.error("Camera access failed", err);
+                isVid = false;
+                updateUI();
+            }
+        }
+
+        function attachStreamToElement(id, streamObj) {
+            const el = document.getElementById(id);
+            if (el && streamObj) {
+                el.srcObject = streamObj;
+                el.play().catch(e => console.log("Play interrupted"));
+            }
+        }
+
+        // ROOM LOGIC
+        function createRoom() {
+            myName = document.getElementById('nameIn').value.trim() || "Host";
+            enterCallView(myPeerId);
+        }
+
+        function joinRoom() {
+            myName = document.getElementById('nameIn').value.trim() || "Guest";
+            const targetPeerId = document.getElementById('joinIdInput').value.trim();
+            
+            if (!targetPeerId) {
+                alert("Please enter a valid Meeting ID!");
+                return;
+            }
+
+            enterCallView(targetPeerId);
+
+            // Call the host
+            const call = peer.call(targetPeerId, stream);
+            call.on('stream', (userRemoteStream) => {
+                addRemoteStream(targetPeerId, userRemoteStream);
+            });
+        }
+
+        function enterCallView(displayId) {
+            document.getElementById('setupView').style.display = 'none';
+            document.getElementById('callView').style.display = 'flex';
+            document.getElementById('roomIdDisplay').innerText = `ID: ${displayId}`;
+            render();
+        }
+
+        function addRemoteStream(peerId, remoteStream) {
+            // Check if already added
+            const exists = remoteStreams.some(item => item.peerId === peerId);
+            if (!exists) {
+                remoteStreams.push({
+                    peerId: peerId,
+                    name: `User_${peerId.slice(0, 4)}`,
+                    stream: remoteStream
+                });
+                render();
+            }
+        }
+
+        function toggleMedia(type) {
+            if (!stream) return;
+            if (type === 'mic') {
+                isMic = !isMic;
+                stream.getAudioTracks()[0].enabled = isMic;
+            } else {
+                isVid = !isVid;
+                stream.getVideoTracks()[0].enabled = isVid;
+                const overlay = document.getElementById('setupCamOff');
+                if(overlay) overlay.classList.toggle('hidden', isVid);
+            }
+            updateUI();
+            if (document.getElementById('callView').style.display === 'flex') render();
+        }
+
+        function updateUI() {
+            const micIcon = isMic ? icons.mic : icons.micOff;
+            const vidIcon = isVid ? icons.vid : icons.vidOff;
+            ['btnMicPre', 'btnMicCall'].forEach(id => {
+                const b = document.getElementById(id);
+                if (b) { b.innerHTML = micIcon; b.classList.toggle('off', !isMic); }
+            });
+            ['btnVidPre', 'btnVidCall'].forEach(id => {
+                const b = document.getElementById(id);
+                if (b) { b.innerHTML = vidIcon; b.classList.toggle('off', !isVid); }
+            });
+        }
+
+        function render() {
+            const grid = document.getElementById('grid');
+            if (!grid) return;
+            grid.innerHTML = "";
+            
+            // Build the dynamic participants list
+            let participants = [{ peerId: 'me', name: myName + " (You)", stream: stream }];
+            remoteStreams.forEach(r => participants.push(r));
+
+            document.getElementById('headerTitle').innerText = `SYNC ROOM (${participants.length})`;
+
+            const start = page * 4;
+            const slice = participants.slice(start, start + 4);
+
+            slice.forEach(u => {
+                const tile = document.createElement('div');
+                tile.className = 'video-tile';
+                
+                const video = document.createElement('video');
+                video.autoplay = true; 
+                video.playsinline = true; 
+                
+                if (u.peerId === 'me') {
+                    video.id = "myCallVideo"; 
+                    video.muted = true; // Never hear yourself
+                    
+                    const camOffOverlay = document.createElement('div');
+                    camOffOverlay.className = `absolute inset-0 bg-zinc-900 flex flex-col items-center justify-center text-xs font-bold text-zinc-600 ${isVid ? 'hidden' : ''}`;
+                    camOffOverlay.innerHTML = `<svg class='mb-1 w-8 h-8 opacity-30' viewBox='0 0 24 24'>${icons.vidOff}</svg>CAMERA OFF`;
+                    
+                    tile.appendChild(video);
+                    tile.appendChild(camOffOverlay);
+                    
+                    setTimeout(() => attachStreamToElement('myCallVideo', stream), 50);
+                } else {
+                    const vidId = `vid_${u.peerId}`;
+                    video.id = vidId;
+                    tile.appendChild(video);
+                    setTimeout(() => attachStreamToElement(vidId, u.stream), 50);
+                }
+                
+                tile.innerHTML += `<div class='name-label'>${u.name}</div>`;
+                grid.appendChild(tile);
+            });
+            
+            document.getElementById('prev').classList.toggle('hidden', page === 0);
+            document.getElementById('next').classList.toggle('hidden', start + 4 >= participants.length);
+        }
+
+        function move(dir) { page += dir; render(); }
+
+        /* CHAT LOGIC */
+        function toggleChat() {
+            isChatOpen = !isChatOpen;
+            document.getElementById('chatPanel').classList.toggle('open', isChatOpen);
+            if(isChatOpen) document.getElementById('chatBadge').classList.add('hidden');
+        }
+
+        function sendMsg() {
+            const input = document.getElementById('chatInput');
+            const box = document.getElementById('chatBox');
+            if (!input.value.trim()) return;
+
+            const msg = document.createElement('div');
+            msg.className = "chat-msg me";
+            msg.innerHTML = `<b>You:</b> ${input.value}`;
+            box.appendChild(msg);
+            
+            input.value = "";
+            box.scrollTop = box.scrollHeight;
+        }
+
+        window.onload = startApp;
+    </script>
+</body>
+</html>
